@@ -72,35 +72,6 @@ Run the main Tkinter desktop dashboard:
 python app.py
 ```
 
----
-
-## 🌐 Web Deployment
-
-The original `app.py` is a Tkinter desktop app, which cloud platforms cannot run directly in a browser. For deployment, use the included Streamlit version:
-
-```bash
-pip install -r requirements.txt
-streamlit run streamlit_app.py
-```
-
-### Deploy on Streamlit Community Cloud
-
-1. Push this project to a GitHub repository.
-2. Go to `https://share.streamlit.io/` and create a new app.
-3. Select your repository and set the main file path to `streamlit_app.py`.
-4. Deploy.
-
-### Deploy on Render
-
-This repo includes `render.yaml`. Push the project to GitHub, create a new Render Blueprint, and select the repository. Render will use:
-
-```bash
-pip install -r requirements.txt
-streamlit run streamlit_app.py --server.port $PORT --server.address 0.0.0.0
-```
-
-Note: free web hosts use temporary storage, so SQLite data and uploaded alert media may reset after redeploys or restarts. For a production version, connect the app to a hosted database and object storage.
-
 ### **Step 4: Configure & Use the App**
 1. Click the **Profile Settings** tab and enter your name, phone number, and emergency contact's WhatsApp phone number (make sure to include the country code prefix, e.g., `+919876543210`). Click **Save Profiles**.
 2. Go back to the **SOS Alert** tab. Type a threat description in the box (e.g., *"Help me, a stranger is grabbing my wrist!*").

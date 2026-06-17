@@ -3,6 +3,8 @@ import sys
 import time
 import wave
 import json
+import mimetypes
+import uuid
 import sqlite3
 import pickle
 import threading
@@ -32,6 +34,13 @@ import winsound
 
 MEDIA_DIR = "alerts_media"
 os.makedirs(MEDIA_DIR, exist_ok=True)
+
+# Optional online upload settings for making attachment links clickable in WhatsApp.
+# Create an unsigned upload preset in Cloudinary, then fill these two values here
+# or set them as Windows environment variables.
+CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "dd0bv8zcb").strip()
+CLOUDINARY_UPLOAD_PRESET = os.environ.get("CLOUDINARY_UPLOAD_PRESET", "aurasafe_unsigned").strip()
+CLOUDINARY_FOLDER = "aurasafe_alerts"
 
 # Session tracking file
 SESSION_FILE = "session.json"
@@ -168,6 +177,56 @@ def fetch_user_alerts(user_email):
     return rows
 
 # ----------------- 📍 NATIVE GEOLOCATION API LOOKUP -----------------
+def upload_attachment_to_cloudinary(file_path):
+    """Uploads a local attachment and returns a public HTTPS URL when Cloudinary is configured."""
+    if not file_path or not os.path.exists(file_path):
+        return None, "File not found"
+
+    if not CLOUDINARY_CLOUD_NAME or not CLOUDINARY_UPLOAD_PRESET:
+        return None, "Cloudinary is not configured"
+
+    boundary = f"----AuraSafeBoundary{uuid.uuid4().hex}"
+    url = f"https://api.cloudinary.com/v1_1/{CLOUDINARY_CLOUD_NAME}/auto/upload"
+    filename = os.path.basename(file_path)
+    content_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+
+    fields = {
+        "upload_preset": CLOUDINARY_UPLOAD_PRESET,
+        "folder": CLOUDINARY_FOLDER,
+    }
+
+    body = bytearray()
+    for name, value in fields.items():
+        body.extend(f"--{boundary}\r\n".encode("utf-8"))
+        body.extend(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"))
+        body.extend(f"{value}\r\n".encode("utf-8"))
+
+    with open(file_path, "rb") as file_obj:
+        file_bytes = file_obj.read()
+
+    body.extend(f"--{boundary}\r\n".encode("utf-8"))
+    body.extend(f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'.encode("utf-8"))
+    body.extend(f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"))
+    body.extend(file_bytes)
+    body.extend(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+
+    request = urllib.request.Request(
+        url,
+        data=bytes(body),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        public_url = result.get("secure_url")
+        if public_url:
+            return public_url, None
+        return None, result.get("error", {}).get("message", "Upload failed")
+    except Exception as e:
+        return None, str(e)
+
 def get_device_location():
     """Queries Windows native GeoCoordinateWatcher API via PowerShell subprocess."""
     ps_script = """
@@ -727,6 +786,41 @@ class SafetyApp:
             
             # Write Log to database
             log_alert(self.logged_in_email, timestamp, loc_str, msg_text, self.attached_image_path, self.attached_audio_path, threat_level)
+
+            image_url = ""
+            audio_url = ""
+            attachment_notes = []
+            if self.attached_image_path:
+                image_url, image_error = upload_attachment_to_cloudinary(self.attached_image_path)
+                if image_url:
+                    attachment_notes.append("Photo uploaded successfully.")
+                else:
+                    attachment_notes.append(f"Photo saved locally only. Upload issue: {image_error}")
+
+            if self.attached_audio_path:
+                audio_url, audio_error = upload_attachment_to_cloudinary(self.attached_audio_path)
+                if audio_url:
+                    attachment_notes.append("Voice note uploaded successfully.")
+                else:
+                    attachment_notes.append(f"Voice note saved locally only. Upload issue: {audio_error}")
+
+            attachment_text = ""
+            original_image_path = self.attached_image_path
+            original_audio_path = self.attached_audio_path
+
+            if image_url:
+                attachment_text += f"Photo Evidence Link: {image_url}\n"
+            elif original_image_path:
+                attachment_text += "Photo Evidence: Saved locally in sender app history\n"
+
+            if audio_url:
+                attachment_text += f"Voice Note Link: {audio_url}\n"
+            elif original_audio_path:
+                attachment_text += "Voice Note: Saved locally in sender app history\n"
+
+            # Prevent WhatsApp from receiving plain local filenames like img_123.jpeg.
+            self.attached_image_path = ""
+            self.attached_audio_path = ""
             
             # Construct message content
             sms_text = (
@@ -741,6 +835,8 @@ class SafetyApp:
                 sms_text += f"📸 Attached Photo logged: {os.path.basename(self.attached_image_path)}\n"
             if self.attached_audio_path:
                 sms_text += f"🎙️ Voice Note logged: {os.path.basename(self.attached_audio_path)}\n"
+            if attachment_text:
+                sms_text += attachment_text
             sms_text += "\n[Sent via Women Safety App (Device Live Location Geotag)]"
             
             # Encode URL
@@ -761,6 +857,8 @@ class SafetyApp:
                 time.sleep(1.0) # Pause to allow tabs to spawn cleanly
                 
             success_info = f"SOS Logged Successfully!\n\nLocation: {loc_str}\nContacts Alerts triggered: {len(contacts)} contacts.\n\nOpening WhatsApp redirection web tabs..."
+            if attachment_notes:
+                success_info += "\n\nAttachment status:\n" + "\n".join(attachment_notes)
             messagebox.showinfo("🚨 SOS Alerts Triggered", success_info)
             
             # Reset attachments in GUI
