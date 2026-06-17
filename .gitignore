@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+session.json
+alerts_media/
+.streamlit/secrets.toml
+streamlit_stdout.log
+streamlit_stderr.log
